@@ -1,0 +1,18 @@
+pyroscope:
+  extraArgs:
+    log.level: info
+
+  # Minimal resources for a kind cluster
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+  persistence:
+    enabled: false
+
+agent:
+  enabled: false

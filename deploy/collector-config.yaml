@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otelcol-ebpf-profiler-config
+  namespace: default
+data:
+  config.yaml: |
+    receivers:
+      profiling:
+
+    exporters:
+      otlphttp/pyroscope:
+        endpoint: http://pyroscope.pyroscope.svc.cluster.local:4040
+        tls:
+          insecure: true
+
+    service:
+      telemetry:
+        logs:
+          level: info
+      pipelines:
+        profiles:
+          receivers: [profiling]
+          exporters: [otlphttp/pyroscope]
