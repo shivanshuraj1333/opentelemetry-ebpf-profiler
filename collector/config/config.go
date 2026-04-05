@@ -59,6 +59,7 @@ type Config struct {
 	LoadProbe              bool          `mapstructure:"load_probe"`
 	GPUProfiling           bool          `mapstructure:"gpu_profiling"`
 	GPUProfilingSocket     string        `mapstructure:"gpu_profiling_socket"`
+	GPUMetrics             bool          `mapstructure:"gpu_metrics"`
 	MapScaleFactor         uint          `mapstructure:"map_scale_factor"`
 	BPFVerifierLogLevel    uint          `mapstructure:"bpf_verifier_log_level"`
 	NoKernelVersionCheck   bool          `mapstructure:"no_kernel_version_check"`

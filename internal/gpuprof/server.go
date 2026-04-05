@@ -20,11 +20,12 @@ import (
 // DefaultSocketPath is used when GPU profiling is enabled without an explicit path.
 const DefaultSocketPath = "/tmp/opentelemetry-ebpf-gpu.sock"
 
-// Server accepts newline-delimited JSON kernel events from the CUDA injection library.
+// Server accepts newline-delimited JSON events from the CUDA injection library.
 type Server struct {
 	socketPath string
 	reporter   reporter.TraceReporter
 	envVars    libpf.Set[string]
+	corr       *Correlator
 
 	mu     sync.Mutex
 	ln     net.Listener
@@ -32,11 +33,16 @@ type Server struct {
 }
 
 // NewServer creates a GPU profiling socket server. socketPath must be non-empty.
-func NewServer(socketPath string, rep reporter.TraceReporter, envVars libpf.Set[string]) *Server {
+// If corr is nil, a default Correlator is used so launch/kernel correlation still works.
+func NewServer(socketPath string, rep reporter.TraceReporter, envVars libpf.Set[string], corr *Correlator) *Server {
+	if corr == nil {
+		corr = NewCorrelator(0, 0)
+	}
 	return &Server{
 		socketPath: socketPath,
 		reporter:   rep,
 		envVars:    envVars,
+		corr:       corr,
 	}
 }
 
@@ -114,12 +120,12 @@ func (s *Server) serveConn(c net.Conn) {
 		if len(line) == 0 {
 			continue
 		}
-		ev, err := ParseKernelEvent(line)
+		ev, err := ParseLineEvent(line)
 		if err != nil {
 			log.Warnf("GPU profiling: drop line: %v", err)
 			continue
 		}
-		if err := ReportKernelEvent(s.reporter, s.envVars, ev); err != nil {
+		if err := HandleLine(s.reporter, s.envVars, s.corr, ev); err != nil {
 			log.Warnf("GPU profiling: report: %v", err)
 		}
 	}

@@ -17,20 +17,27 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/traceutil"
 )
 
-// KernelEvent is the JSON line format written by libotel_cuda_inject.so.
-type KernelEvent struct {
-	Ver   int    `json:"ver"`
-	PID   int32  `json:"pid"`
-	TID   int32  `json:"tid"`
-	Dev   int32  `json:"dev"`
-	Name  string `json:"name"`
-	Start uint64 `json:"start_ns"`
-	End   uint64 `json:"end_ns"`
+// LineEvent is the JSON line format from libotel_cuda_inject.so (ver 1).
+// kind: omitted or "kernel" (default), "launch" (CPU stack at cuda launch), "memcpy".
+type LineEvent struct {
+	Ver           int      `json:"ver"`
+	Kind          string   `json:"kind"`
+	PID           int32    `json:"pid"`
+	TID           int32    `json:"tid"`
+	Dev           int32    `json:"dev"`
+	Name          string   `json:"name"`
+	Start         uint64   `json:"start_ns"`
+	End           uint64   `json:"end_ns"`
+	CorrelationID uint64   `json:"correlation_id"`
+	Frames        []string `json:"frames"`
+	Bytes         uint64   `json:"bytes"`
+	CopyKind      string   `json:"copy_kind"`
+	StreamID      uint32   `json:"stream_id"`
 }
 
-// ParseKernelEvent decodes one JSON object from the injection library.
-func ParseKernelEvent(line []byte) (KernelEvent, error) {
-	var ev KernelEvent
+// ParseLineEvent decodes one JSON object from the injection library.
+func ParseLineEvent(line []byte) (LineEvent, error) {
+	var ev LineEvent
 	if err := json.Unmarshal(line, &ev); err != nil {
 		return ev, err
 	}
@@ -39,9 +46,6 @@ func ParseKernelEvent(line []byte) (KernelEvent, error) {
 	}
 	if ev.PID <= 0 {
 		return ev, fmt.Errorf("invalid pid %d", ev.PID)
-	}
-	if ev.Name == "" {
-		ev.Name = "<unnamed_cuda_kernel>"
 	}
 	return ev, nil
 }
@@ -53,8 +57,47 @@ func kernelFrameAddress(name string, dev int32) libpf.AddressOrLineno {
 	return libpf.AddressOrLineno(h.Sum32())
 }
 
-// ReportKernelEvent builds a single-frame GPU trace and reports it.
-func ReportKernelEvent(rep reporter.TraceReporter, envVars libpf.Set[string], ev KernelEvent) error {
+// HandleLine dispatches a parsed event: launch correlation, memcpy, or kernel (with optional merge).
+func HandleLine(rep reporter.TraceReporter, envVars libpf.Set[string], corr *Correlator, ev LineEvent) error {
+	kind := ev.Kind
+	if kind == "" {
+		kind = "kernel"
+	}
+	switch kind {
+	case "launch":
+		return handleLaunch(corr, ev)
+	case "memcpy":
+		return reportMemcpy(rep, envVars, corr, ev)
+	default:
+		return reportKernel(rep, envVars, corr, ev)
+	}
+}
+
+func handleLaunch(corr *Correlator, ev LineEvent) error {
+	if corr == nil {
+		return nil
+	}
+	pid := libpf.PID(ev.PID)
+	corr.StoreLaunch(pid, ev.CorrelationID, ev.Frames)
+	return nil
+}
+
+func reportMemcpy(rep reporter.TraceReporter, envVars libpf.Set[string], corr *Correlator, ev LineEvent) error {
+	name := ev.Name
+	if name == "" {
+		name = "cudaMemcpy"
+		if ev.CopyKind != "" {
+			name = "cudaMemcpy (" + ev.CopyKind + ")"
+		}
+	}
+	ev2 := LineEvent{
+		Ver: ev.Ver, Kind: "kernel", PID: ev.PID, TID: ev.TID, Dev: ev.Dev,
+		Name: name, Start: ev.Start, End: ev.End, CorrelationID: ev.CorrelationID,
+	}
+	return reportKernel(rep, envVars, corr, ev2)
+}
+
+func reportKernel(rep reporter.TraceReporter, envVars libpf.Set[string], corr *Correlator, ev LineEvent) error {
 	dur := int64(ev.End) - int64(ev.Start)
 	if dur < 0 {
 		dur = 0
@@ -70,8 +113,16 @@ func ReportKernelEvent(rep reporter.TraceReporter, envVars libpf.Set[string], ev
 	metaCfg := process.MetaConfig{IncludeEnvVars: envVars}
 	pm := proc.GetProcessMeta(metaCfg)
 
-	trace := &libpf.Trace{
-		Frames: make(libpf.Frames, 0, 1),
+	trace := &libpf.Trace{Frames: make(libpf.Frames, 0, 64)}
+	if corr != nil && ev.CorrelationID != 0 {
+		if syms := corr.TakeLaunch(pid, ev.CorrelationID); len(syms) > 0 {
+			hostFrames := FramesFromSymbols(syms)
+			trace.Frames = append(trace.Frames, hostFrames...)
+		}
+	}
+
+	if ev.Name == "" {
+		ev.Name = "<unnamed_cuda_kernel>"
 	}
 	trace.Frames.Append(&libpf.Frame{
 		Type:            libpf.UnknownFrame,

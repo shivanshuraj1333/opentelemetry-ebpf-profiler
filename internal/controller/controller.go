@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/ebpf-profiler/internal/gpumetrics"
 	"go.opentelemetry.io/ebpf-profiler/internal/gpuprof"
 	"go.opentelemetry.io/ebpf-profiler/internal/linux"
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
@@ -96,12 +97,17 @@ func (c *Controller) Start(ctx context.Context) error {
 		if socket == "" {
 			socket = gpuprof.DefaultSocketPath
 		}
-		srv := gpuprof.NewServer(socket, c.reporter, envVars)
+		corr := gpuprof.NewCorrelator(0, 0)
+		srv := gpuprof.NewServer(socket, c.reporter, envVars, corr)
 		go func() {
 			if err := srv.Start(ctx); err != nil {
 				log.Errorf("GPU profiling server: %v", err)
 			}
 		}()
+	}
+
+	if c.config.GPUMetrics {
+		go gpumetrics.Start(ctx, c.config.MonitorInterval)
 	}
 
 	// Load the eBPF code and map definitions

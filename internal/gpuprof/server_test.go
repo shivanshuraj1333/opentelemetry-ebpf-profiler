@@ -41,7 +41,7 @@ func TestServerServeConn(t *testing.T) {
 	line := fmt.Sprintf(`{"ver":1,"pid":%d,"tid":%d,"dev":1,"name":"vec_add","start_ns":100,"end_ns":200}`+"\n", pid, pid)
 
 	rep := &countingReporter{}
-	s := &Server{reporter: rep, envVars: nil}
+	s := NewServer("", rep, nil, nil)
 
 	client, srv := net.Pipe()
 	go func() {
