@@ -161,3 +161,52 @@ func TestBaseReporterGenerate(t *testing.T) {
 	assert.Greater(t, scopeProfile.Profiles().Len(), 0,
 		"Should have at least one profile")
 }
+
+func TestBaseReporterReportTraceEventGPUDeviceKeying(t *testing.T) {
+	reporter := createTestBaseReporter(t, nil)
+
+	buildTrace := func(name string) *libpf.Trace {
+		tr := &libpf.Trace{Frames: make(libpf.Frames, 0, 1)}
+		tr.Frames.Append(&libpf.Frame{
+			Type:            libpf.UnknownFrame,
+			FunctionName:    libpf.Intern(name),
+			SourceFile:      libpf.Intern("cuda:gpu"),
+			AddressOrLineno: 0x100,
+		})
+		return tr
+	}
+
+	now := time.Now()
+	baseMeta := func(dev int32) *samples.TraceEventMeta {
+		return &samples.TraceEventMeta{
+			Timestamp:      libpf.UnixTime64(now.UnixNano()),
+			Comm:           libpf.Intern("worker"),
+			ProcessName:    libpf.Intern("worker"),
+			ExecutablePath: libpf.Intern("/usr/bin/train"),
+			PID:            5000,
+			TID:            5001,
+			CPU:            -1,
+			Origin:         support.TraceOriginGPU,
+			OffTime:        1000,
+			GPUDevice:      dev,
+		}
+	}
+
+	tr := buildTrace("same_kernel")
+	tr.Hash = libpf.TraceHash{}
+	require.NoError(t, reporter.ReportTraceEvent(tr, baseMeta(0)))
+	require.NoError(t, reporter.ReportTraceEvent(tr, baseMeta(1)))
+
+	eventsTreePtr := reporter.traceEvents.RLock()
+	eventsTree := *eventsTreePtr
+	reporter.traceEvents.RUnlock(&eventsTreePtr)
+
+	var gpuEvents samples.SampleToEvents
+	for _, rtp := range eventsTree {
+		gpuEvents = rtp.Events[support.TraceOriginGPU]
+		if len(gpuEvents) > 0 {
+			break
+		}
+	}
+	require.Len(t, gpuEvents, 2, "same stack on two GPUs must not merge")
+}

@@ -343,6 +343,64 @@ func TestGenerate_EmptyTree(t *testing.T) {
 	assert.Equal(t, 0, profiles.ResourceProfiles().Len())
 }
 
+func TestGenerate_GPUOrigin(t *testing.T) {
+	d, err := New(100, nil)
+	require.NoError(t, err)
+
+	filePath := libpf.Intern("/opt/train/model")
+	mapping := libpf.NewFrameMapping(libpf.FrameMappingData{
+		File: libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
+			FileID:   libpf.NewFileID(9, 10),
+			FileName: filePath,
+		}),
+	})
+	frames := singleFrameTrace(libpf.UnknownFrame, mapping, 0x40,
+		"softmax_forward", libpf.Intern("cuda:gpu"), 0)
+
+	resourceKey := samples.ResourceKey{
+		ExecutablePath: filePath,
+		PID:            4242,
+	}
+	sampleKey := samples.SampleKey{
+		Hash:      libpf.NewTraceHash(0x1122334455667788, 0xaabbccddeeff0011),
+		Comm:      libpf.Intern("python3"),
+		TID:       4243,
+		CPU:       -1,
+		GPUDevice: 0,
+	}
+	events := map[libpf.Origin]samples.SampleToEvents{
+		support.TraceOriginGPU: {
+			sampleKey: &samples.TraceEvents{
+				Frames:     frames,
+				Timestamps: []uint64{uint64(time.Unix(1010, 0).UnixNano())},
+				OffTimes:   []int64{15000},
+			},
+		},
+	}
+	tree := samples.TraceEventsTree{
+		resourceKey: samples.ResourceToProfiles{Events: events},
+	}
+
+	profiles, err := testGenerate(d, tree, "agent", "v-gpu")
+	require.NoError(t, err)
+	require.Equal(t, 1, profiles.ResourceProfiles().Len())
+	rp := profiles.ResourceProfiles().At(0)
+	sp := rp.ScopeProfiles().At(0)
+	require.Equal(t, 1, sp.Profiles().Len())
+	prof := sp.Profiles().At(0)
+	require.Equal(t, 1, prof.Samples().Len())
+	s := prof.Samples().At(0)
+	require.Equal(t, 1, s.Values().Len())
+	assert.Equal(t, int64(15000), s.Values().At(0))
+
+	dic := profiles.Dictionary()
+	st := prof.SampleType()
+	typeStr := dic.StringTable().At(int(st.TypeStrindex()))
+	unitStr := dic.StringTable().At(int(st.UnitStrindex()))
+	assert.Equal(t, "gpu", typeStr)
+	assert.Equal(t, "nanoseconds", unitStr)
+}
+
 func singleFrameTrace(ty libpf.FrameType, mapping libpf.FrameMapping,
 	lineno libpf.AddressOrLineno, funcName string, sourceFile libpf.String,
 	sourceLine libpf.SourceLineno,
