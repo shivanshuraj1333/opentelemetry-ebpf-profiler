@@ -365,6 +365,8 @@ typedef enum TraceOrigin {
   TRACE_SAMPLING,
   TRACE_OFF_CPU,
   TRACE_PROBE,
+  // GPU / CUDA samples delivered out-of-band (injection library + agent socket), not from eBPF.
+  TRACE_GPU,
 } TraceOrigin;
 
 // Maximum number of unique stack deltas needed on a system. This is based on

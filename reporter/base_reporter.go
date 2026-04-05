@@ -51,6 +51,7 @@ func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceE
 	case support.TraceOriginSampling:
 	case support.TraceOriginOffCPU:
 	case support.TraceOriginProbe:
+	case support.TraceOriginGPU:
 	default:
 		return fmt.Errorf("skip reporting trace for %d origin: %w", meta.Origin,
 			errUnknownOrigin)
@@ -83,11 +84,16 @@ func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceE
 		rtp.Events[meta.Origin] = make(samples.SampleToEvents)
 	}
 
+	gpuDev := int32(-1)
+	if meta.Origin == support.TraceOriginGPU {
+		gpuDev = meta.GPUDevice
+	}
 	sampleKey := samples.SampleKey{
 		Hash:      trace.Hash,
 		Comm:      meta.Comm,
 		TID:       int64(meta.TID),
 		CPU:       int64(meta.CPU),
+		GPUDevice: gpuDev,
 		ExtraMeta: extraMeta,
 	}
 	if events, exists := rtp.Events[meta.Origin][sampleKey]; exists {

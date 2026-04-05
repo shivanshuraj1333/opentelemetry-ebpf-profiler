@@ -18,9 +18,11 @@ type TraceEventMeta struct {
 	CPU            int
 	Origin         libpf.Origin
 	OffTime        int64
-	PID, TID       libpf.PID
-	SpanID         libpf.APMSpanID
-	TraceID        libpf.APMTraceID
+	// GPUDevice is the CUDA device index for GPU-origin samples; ignored otherwise.
+	GPUDevice int32
+	PID, TID  libpf.PID
+	SpanID    libpf.APMSpanID
+	TraceID   libpf.APMTraceID
 }
 
 // TraceEvents holds known information about a trace.
@@ -80,6 +82,9 @@ type SampleKey struct {
 
 	TID int64
 	CPU int64
+
+	// GPUDevice is >= 0 for GPU samples; -1 when not applicable (CPU / off-CPU / probe).
+	GPUDevice int32
 
 	SpanID  libpf.APMSpanID
 	TraceID libpf.APMTraceID

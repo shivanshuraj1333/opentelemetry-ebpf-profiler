@@ -101,6 +101,7 @@ const (
 	TraceOriginSampling = C.TRACE_SAMPLING
 	TraceOriginOffCPU   = C.TRACE_OFF_CPU
 	TraceOriginProbe    = C.TRACE_PROBE
+	TraceOriginGPU      = C.TRACE_GPU
 )
 
 type ApmSpanID C.ApmSpanID

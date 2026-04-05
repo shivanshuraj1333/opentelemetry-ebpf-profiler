@@ -97,6 +97,7 @@ func (p *Pdata) Generate(tree samples.TraceEventsTree,
 			support.TraceOriginSampling,
 			support.TraceOriginOffCPU,
 			support.TraceOriginProbe,
+			support.TraceOriginGPU,
 		} {
 			if len(toEvents.Events[origin]) == 0 {
 				// Do not append empty profiles.
@@ -167,6 +168,9 @@ func (p *Pdata) setProfile(
 	case support.TraceOriginProbe:
 		st.SetTypeStrindex(stringSet.Add("events"))
 		st.SetUnitStrindex(stringSet.Add("count"))
+	case support.TraceOriginGPU:
+		st.SetTypeStrindex(stringSet.Add("gpu"))
+		st.SetUnitStrindex(stringSet.Add("nanoseconds"))
 	default:
 		// Should never happen
 		return fmt.Errorf("generating profile for unsupported origin %d", origin)
@@ -176,7 +180,7 @@ func (p *Pdata) setProfile(
 		sample := profile.Samples().AppendEmpty()
 
 		sample.TimestampsUnixNano().FromRaw(traceInfo.Timestamps)
-		if origin == support.TraceOriginOffCPU {
+		if origin == support.TraceOriginOffCPU || origin == support.TraceOriginGPU {
 			sample.Values().Append(traceInfo.OffTimes...)
 		}
 
@@ -284,6 +288,10 @@ func (p *Pdata) setProfile(
 			semconv.ThreadIDKey, sampleKey.TID)
 		attrMgr.AppendInt(sample.AttributeIndices(),
 			semconv.CPULogicalNumberKey, int64(sampleKey.CPU))
+		if origin == support.TraceOriginGPU && sampleKey.GPUDevice >= 0 {
+			attrMgr.AppendInt(sample.AttributeIndices(),
+				attribute.Key("gpu.device.id"), int64(sampleKey.GPUDevice))
+		}
 
 		if p.ExtraSampleAttrProd != nil {
 			extra := p.ExtraSampleAttrProd.ExtraSampleAttrs(attrMgr, sampleKey.ExtraMeta)

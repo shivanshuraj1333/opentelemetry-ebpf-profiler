@@ -78,6 +78,9 @@ var (
 		"captured profiling samples."
 	probeLinkHelper = "Attach a probe to a symbol of an executable. " +
 		"Expected format: probe_type:target[:symbol]. probe_type can be kprobe, kretprobe, uprobe, or uretprobe."
+	gpuProfilingHelp       = "Enable CUDA GPU kernel profiling via Unix socket (requires CUDA injection library; see support/cuda-inject)."
+	gpuProfilingSocketHelp = "Unix socket path for GPU kernel events. Default: /tmp/opentelemetry-ebpf-gpu.sock"
+
 	loadProbeHelper = "Load generic eBPF program that can be attached externally to " +
 		"various user or kernel space hooks."
 )
@@ -147,6 +150,9 @@ func parseArgs() (*controller.Config, error) {
 	})
 
 	fs.BoolVar(&args.LoadProbe, "load-probe", false, loadProbeHelper)
+
+	fs.BoolVar(&args.GPUProfiling, "gpu-profiling", false, gpuProfilingHelp)
+	fs.StringVar(&args.GPUProfilingSocket, "gpu-profiling-socket", "", gpuProfilingSocketHelp)
 
 	fs.Usage = func() {
 		fs.PrintDefaults()
