@@ -63,6 +63,8 @@ func NewController(cfg *controller.Config, rs receiver.Settings,
 	meter := rs.MeterProvider.Meter(ctrlName)
 	metrics.Start(meter)
 
+	cfg.MeterProvider = rs.MeterProvider
+
 	return &Controller{
 		onShutdown: cfg.OnShutdown,
 		ctlr:       controller.New(cfg),

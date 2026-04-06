@@ -107,7 +107,10 @@ func (c *Controller) Start(ctx context.Context) error {
 	}
 
 	if c.config.GPUMetrics {
-		go gpumetrics.Start(ctx, c.config.MonitorInterval)
+		go gpumetrics.Start(ctx, gpumetrics.Config{
+			MeterProvider: c.config.MeterProvider,
+			Interval:      c.config.MonitorInterval,
+		})
 	}
 
 	// Load the eBPF code and map definitions

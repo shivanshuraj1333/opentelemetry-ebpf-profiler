@@ -94,13 +94,20 @@ static void ensure_socket_unlocked(void) {
 
 static void write_line(const char *line, size_t len) {
   pthread_mutex_lock(&g_mu);
-  ensure_socket_unlocked();
-  if (g_sock >= 0) {
-    ssize_t w = write(g_sock, line, len);
-    if (w < 0) {
+  for (int attempt = 0; attempt < 4; attempt++) {
+    if (g_sock < 0) {
+      ensure_socket_unlocked();
+    }
+    if (g_sock >= 0) {
+      ssize_t w = write(g_sock, line, len);
+      if (w >= 0 && (size_t)w == len) {
+        pthread_mutex_unlock(&g_mu);
+        return;
+      }
       close(g_sock);
       g_sock = -1;
     }
+    usleep(500 * (unsigned)(attempt + 1));
   }
   pthread_mutex_unlock(&g_mu);
 }

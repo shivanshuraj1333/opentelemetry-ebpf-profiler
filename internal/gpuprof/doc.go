@@ -5,7 +5,7 @@
 // (see support/cuda-inject) over a Unix domain socket and forwards it into the
 // standard TraceReporter pipeline.
 //
-// Event kinds (JSON lines, ver 1):
+// Event kinds (JSON lines, ver 1, optional schema 1):
 //   - launch: CPU backtrace at cudaLaunch* entry, with correlation_id
 //   - kernel: completed kernel (optional correlation_id); merged with pending launch stacks
 //   - memcpy: async memcpy activity (optional correlation_id)

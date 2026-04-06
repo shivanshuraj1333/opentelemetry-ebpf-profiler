@@ -9,6 +9,7 @@ import (
 	"go.opentelemetry.io/collector/consumer/xconsumer"
 	"go.opentelemetry.io/ebpf-profiler/collector/config"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
+	"go.opentelemetry.io/otel/metric"
 )
 
 type Config struct {
@@ -26,6 +27,10 @@ type Config struct {
 	// Either ReporterFactory or Reporter must be set. If both are set, ReporterFactory will be used.
 	ReporterFactory func(cfg *reporter.Config, nextConsumer xconsumer.Profiles) (reporter.Reporter, error)
 	Reporter        reporter.Reporter
+
+	// MeterProvider exports optional host GPU gauges when GPUMetrics is enabled.
+	// Set by the OpenTelemetry Collector receiver; nil for standalone binary.
+	MeterProvider metric.MeterProvider
 
 	Fs *flag.FlagSet
 }
