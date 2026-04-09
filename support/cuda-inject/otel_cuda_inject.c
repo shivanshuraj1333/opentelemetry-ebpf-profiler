@@ -134,7 +134,7 @@ static void emit_launch(uint64_t corr_id) {
   }
   size_t pos = 0;
   int w = snprintf(buf + pos, MAX_JSON - pos,
-                   "{\"ver\":1,\"kind\":\"launch\",\"pid\":%d,\"tid\":%d,\"correlation_id\":%llu,\"frames\":[",
+                   "{\"ver\":1,\"schema\":1,\"kind\":\"launch\",\"pid\":%d,\"tid\":%d,\"correlation_id\":%llu,\"frames\":[",
                    (int)getpid(), (int)otel_tid(), (unsigned long long)corr_id);
   if (w < 0 || (size_t)w >= MAX_JSON - pos) {
     goto done;
@@ -167,7 +167,7 @@ static void emit_kernel_line(int32_t dev, uint32_t stream, uint64_t corr, const 
   json_escape(name ? name : "", esc, sizeof(esc));
   char line[4096];
   int n = snprintf(line, sizeof(line),
-                   "{\"ver\":1,\"kind\":\"kernel\",\"pid\":%d,\"tid\":%d,\"dev\":%d,\"stream_id\":%u,"
+                   "{\"ver\":1,\"schema\":1,\"kind\":\"kernel\",\"pid\":%d,\"tid\":%d,\"dev\":%d,\"stream_id\":%u,"
                    "\"correlation_id\":%llu,\"name\":\"%s\",\"start_ns\":%llu,\"end_ns\":%llu}\n",
                    (int)getpid(), (int)otel_tid(), (int)dev, (unsigned)stream,
                    (unsigned long long)corr, esc, (unsigned long long)start,
@@ -198,17 +198,38 @@ static const char *memcpy_kind_str(uint8_t k) {
   }
 }
 
-static void emit_memcpy_line(int32_t dev, uint64_t corr, uint64_t bytes, uint8_t kind) {
-  char line[512];
+static void emit_memcpy_line(int32_t dev, uint64_t corr, uint64_t bytes, uint8_t kind,
+                             uint64_t start_ns, uint64_t end_ns) {
+  char line[768];
   int n = snprintf(line, sizeof(line),
-                   "{\"ver\":1,\"kind\":\"memcpy\",\"pid\":%d,\"tid\":%d,\"dev\":%d,"
-                   "\"correlation_id\":%llu,\"bytes\":%llu,\"copy_kind\":\"%s\"}\n",
+                   "{\"ver\":1,\"schema\":1,\"kind\":\"memcpy\",\"pid\":%d,\"tid\":%d,\"dev\":%d,"
+                   "\"correlation_id\":%llu,\"bytes\":%llu,\"copy_kind\":\"%s\","
+                   "\"start_ns\":%llu,\"end_ns\":%llu}\n",
                    (int)getpid(), (int)otel_tid(), (int)dev, (unsigned long long)corr,
-                   (unsigned long long)bytes, memcpy_kind_str(kind));
+                   (unsigned long long)bytes, memcpy_kind_str(kind),
+                   (unsigned long long)start_ns, (unsigned long long)end_ns);
   if (n > 0 && (size_t)n < sizeof(line)) {
     write_line(line, (size_t)n);
   }
 }
+
+#ifdef OTEL_CUPTI_PC_SAMPLING
+static void emit_pc_sample_line(int32_t dev, int32_t tid, uint64_t corr, uint64_t pc_off,
+                                uint32_t stall, uint32_t samples, uint64_t start_ns,
+                                uint64_t end_ns) {
+  char line[768];
+  int n = snprintf(line, sizeof(line),
+                   "{\"ver\":1,\"schema\":1,\"kind\":\"pcsample\",\"pid\":%d,\"tid\":%d,\"dev\":%d,"
+                   "\"correlation_id\":%llu,\"pc_offset\":%llu,\"stall_reason\":%u,\"samples\":%u,"
+                   "\"start_ns\":%llu,\"end_ns\":%llu}\n",
+                   (int)getpid(), (int)tid, (int)dev, (unsigned long long)corr,
+                   (unsigned long long)pc_off, stall, samples, (unsigned long long)start_ns,
+                   (unsigned long long)end_ns);
+  if (n > 0 && (size_t)n < sizeof(line)) {
+    write_line(line, (size_t)n);
+  }
+}
+#endif
 
 void CUPTIAPI onRuntimeAPI(void *userdata, CUpti_CallbackDomain domain, CUpti_CallbackId cbid,
                            const CUpti_CallbackData *cb) {
@@ -244,9 +265,18 @@ static void handle_record(CUpti_Activity *rec) {
   case CUPTI_ACTIVITY_KIND_MEMCPY: {
     /* Memcpy4 is widely available in recent CUPTI toolkits. */
     CUpti_ActivityMemcpy4 *m = (CUpti_ActivityMemcpy4 *)rec;
-    emit_memcpy_line((int32_t)m->deviceId, m->correlationId, m->bytes, (uint8_t)m->copyKind);
+    emit_memcpy_line((int32_t)m->deviceId, m->correlationId, m->bytes, (uint8_t)m->copyKind,
+                     m->start, m->end);
     break;
   }
+#ifdef OTEL_CUPTI_PC_SAMPLING
+  case CUPTI_ACTIVITY_KIND_PC_SAMPLING: {
+    CUpti_ActivityPCSampling3 *p = (CUpti_ActivityPCSampling3 *)rec;
+    emit_pc_sample_line(0, otel_tid(), (uint64_t)p->correlationId, p->pcOffset,
+                        (uint32_t)p->stallReason, p->samples, 0, 0);
+    break;
+  }
+#endif
   default:
     break;
   }
@@ -295,6 +325,9 @@ static void otel_cupti_start(void) {
   cuptiActivityEnable(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
   cuptiActivityEnable(CUPTI_ACTIVITY_KIND_KERNEL);
   cuptiActivityEnable(CUPTI_ACTIVITY_KIND_MEMCPY);
+#ifdef OTEL_CUPTI_PC_SAMPLING
+  cuptiActivityEnable(CUPTI_ACTIVITY_KIND_PC_SAMPLING);
+#endif
 }
 
 __attribute__((constructor)) static void otel_ctor(void) { otel_cupti_start(); }
