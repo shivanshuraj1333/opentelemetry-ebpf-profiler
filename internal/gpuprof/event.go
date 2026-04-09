@@ -18,9 +18,12 @@ import (
 )
 
 // LineEvent is the JSON line format from libotel_cuda_inject.so (ver 1).
-// kind: omitted or "kernel" (default), "launch" (CPU stack at cuda launch), "memcpy".
+// kind: omitted or "kernel" (default), "launch" (CPU stack at cuda launch), "memcpy",
+// "pcsample" (CUPTI PC sampling / stall metadata when enabled in the inject library).
+// schema is optional JSON protocol revision (1 = current); ver remains the top-level format.
 type LineEvent struct {
 	Ver           int      `json:"ver"`
+	Schema        int      `json:"schema,omitempty"`
 	Kind          string   `json:"kind"`
 	PID           int32    `json:"pid"`
 	TID           int32    `json:"tid"`
@@ -33,6 +36,9 @@ type LineEvent struct {
 	Bytes         uint64   `json:"bytes"`
 	CopyKind      string   `json:"copy_kind"`
 	StreamID      uint32   `json:"stream_id"`
+	PCOffset      uint64   `json:"pc_offset,omitempty"`
+	StallReason   uint32   `json:"stall_reason,omitempty"`
+	Samples       uint32   `json:"samples,omitempty"`
 }
 
 // ParseLineEvent decodes one JSON object from the injection library.
@@ -43,6 +49,9 @@ func ParseLineEvent(line []byte) (LineEvent, error) {
 	}
 	if ev.Ver != 1 {
 		return ev, fmt.Errorf("unsupported event ver %d", ev.Ver)
+	}
+	if ev.Schema != 0 && ev.Schema != 1 {
+		return ev, fmt.Errorf("unsupported event schema %d", ev.Schema)
 	}
 	if ev.PID <= 0 {
 		return ev, fmt.Errorf("invalid pid %d", ev.PID)
@@ -68,6 +77,8 @@ func HandleLine(rep reporter.TraceReporter, envVars libpf.Set[string], corr *Cor
 		return handleLaunch(corr, ev)
 	case "memcpy":
 		return reportMemcpy(rep, envVars, corr, ev)
+	case "pcsample":
+		return reportPCSample(rep, envVars, corr, ev)
 	default:
 		return reportKernel(rep, envVars, corr, ev)
 	}
@@ -80,6 +91,19 @@ func handleLaunch(corr *Correlator, ev LineEvent) error {
 	pid := libpf.PID(ev.PID)
 	corr.StoreLaunch(pid, ev.CorrelationID, ev.Frames)
 	return nil
+}
+
+func reportPCSample(rep reporter.TraceReporter, envVars libpf.Set[string], corr *Correlator, ev LineEvent) error {
+	// Stall reason is a CUpti_ActivityPCSamplingStallReason value; decode names in tooling if needed.
+	kname := fmt.Sprintf("pc+0x%x stall#%d", ev.PCOffset, ev.StallReason)
+	if ev.Samples > 0 {
+		kname = fmt.Sprintf("%s (x%d)", kname, ev.Samples)
+	}
+	ev2 := LineEvent{
+		Ver: ev.Ver, Schema: ev.Schema, Kind: "kernel", PID: ev.PID, TID: ev.TID, Dev: ev.Dev,
+		Name: kname, Start: ev.Start, End: ev.End, CorrelationID: ev.CorrelationID,
+	}
+	return reportKernel(rep, envVars, corr, ev2)
 }
 
 func reportMemcpy(rep reporter.TraceReporter, envVars libpf.Set[string], corr *Correlator, ev LineEvent) error {

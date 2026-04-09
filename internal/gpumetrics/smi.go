@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package gpumetrics collects host GPU telemetry via nvidia-smi and optionally
-// records OTLP metrics when a MeterProvider is configured (Collector receiver).
+// records OTLP metrics when a MeterProvider is configured (Collector receiver or
+// standalone main when -gpu-metrics and -collection-agent are set).
 package gpumetrics // import "go.opentelemetry.io/ebpf-profiler/internal/gpumetrics"
 
 import (

@@ -79,7 +79,8 @@ var (
 	probeLinkHelper = "Attach a probe to a symbol of an executable. " +
 		"Expected format: probe_type:target[:symbol]. probe_type can be kprobe, kretprobe, uprobe, or uretprobe."
 	gpuProfilingHelp       = "Enable CUDA GPU kernel profiling via Unix socket (requires CUDA injection library; see support/cuda-inject)."
-	gpuMetricsHelp         = "Periodically log GPU stats via nvidia-smi (requires binary in PATH; complements GPU profiling)."
+	gpuMetricsHelp = "Poll nvidia-smi for GPU stats. With -collection-agent, also exports OTLP gauges (standalone); " +
+		"the Collector receiver always uses its telemetry MeterProvider when gpu_metrics is enabled."
 	gpuProfilingSocketHelp = "Unix socket path for GPU kernel events. Default: /tmp/opentelemetry-ebpf-gpu.sock"
 
 	loadProbeHelper = "Load generic eBPF program that can be attached externally to " +

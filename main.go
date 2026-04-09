@@ -13,17 +13,18 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"time"
 
 	"golang.org/x/sys/unix"
 
 	"go.opentelemetry.io/ebpf-profiler/internal/controller"
+	"go.opentelemetry.io/ebpf-profiler/internal/gpumetrics"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/times"
 	"go.opentelemetry.io/ebpf-profiler/vc"
 	"go.opentelemetry.io/otel/metric/noop"
-
-	"go.opentelemetry.io/ebpf-profiler/internal/log"
 )
 
 // Short copyright / license text for eBPF code
@@ -106,6 +107,26 @@ func mainWithExitCode() exitCode {
 
 	metrics.Start(noop.Meter{})
 
+	var meterShutdown func(context.Context) error
+	if cfg.GPUMetrics && cfg.CollAgentAddr != "" {
+		mp, shutdown, err := gpumetrics.NewStandaloneMeterProvider(ctx, gpumetrics.OTLPStandaloneConfig{
+			Endpoint:   cfg.CollAgentAddr,
+			DisableTLS: cfg.DisableTLS,
+			Interval:   cfg.MonitorInterval,
+			Name:       os.Args[0],
+			Version:    vc.Version(),
+		})
+		if err != nil {
+			log.Errorf("GPU metrics OTLP: %v", err)
+		} else {
+			cfg.MeterProvider = mp
+			meterShutdown = shutdown
+			log.Infof("GPU metrics: exporting OTLP gauges to %s", cfg.CollAgentAddr)
+		}
+	} else if cfg.GPUMetrics && cfg.CollAgentAddr == "" {
+		log.Infof("GPU metrics: nvidia-smi logging only (set -collection-agent to export OTLP metrics)")
+	}
+
 	rep, err := reporter.NewOTLP(&reporter.Config{
 		Name:                   os.Args[0],
 		Version:                vc.Version(),
@@ -138,6 +159,14 @@ func mainWithExitCode() exitCode {
 
 	// Block waiting for a signal to indicate the program should terminate
 	<-ctx.Done()
+
+	if meterShutdown != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := meterShutdown(shutdownCtx); err != nil {
+			log.Errorf("GPU metrics OTLP shutdown: %v", err)
+		}
+		cancel()
+	}
 
 	log.Info("Exiting ...")
 	return exitSuccess

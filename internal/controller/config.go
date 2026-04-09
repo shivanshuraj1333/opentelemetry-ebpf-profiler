@@ -29,7 +29,8 @@ type Config struct {
 	Reporter        reporter.Reporter
 
 	// MeterProvider exports optional host GPU gauges when GPUMetrics is enabled.
-	// Set by the OpenTelemetry Collector receiver; nil for standalone binary.
+	// Set by the OpenTelemetry Collector receiver, or by standalone main when
+	// -gpu-metrics and -collection-agent are both set.
 	MeterProvider metric.MeterProvider
 
 	Fs *flag.FlagSet
