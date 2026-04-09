@@ -29,6 +29,10 @@ eBPF.
 - Support for native `inline frames`, which provide insights into compiler
   optimizations and offer a higher precision of function call chains.
 
+Optional **CUDA GPU profiling** (CUPTI injection, OTLP profiles) is described in
+[docs/GPU_PROFILING_VALIDATION.md](docs/GPU_PROFILING_VALIDATION.md) for Linux
+hosts with NVIDIA GPUs.
+
 ## Building
 
 We have integrated the profiler into the [OTel Collector](https://opentelemetry.io/docs/collector/) as a receiver,
