@@ -34,6 +34,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind/elfunwindinfo"
 	"go.opentelemetry.io/ebpf-profiler/periodiccaller"
+	"go.opentelemetry.io/ebpf-profiler/process"
 	pm "go.opentelemetry.io/ebpf-profiler/processmanager"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpf"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
@@ -45,6 +46,9 @@ import (
 
 // Compile time check to make sure times.Times satisfies the interfaces.
 var _ Intervals = (*times.Times)(nil)
+
+// pidLoggedOnce tracks PIDs we've already logged about for container ID lookup to avoid flooding.
+var pidLoggedOnce sync.Map
 
 const (
 	// ProbabilisticThresholdMax defines the upper bound of the probabilistic profiling
@@ -1038,11 +1042,37 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) (*libpf.EbpfTrace, error) {
 
 	pid := libpf.PID(ptr.Pid)
 	procMeta := t.processManager.MetaForPID(pid)
+	// If container ID lookup via /proc/<pid>/cgroup failed (e.g., PID namespace mismatch
+	// on kind clusters where eBPF reports init-namespace PIDs), fall back to walking the
+	// host cgroup tree by the cgroupv2 cgroup ID (= cgroup directory inode) reported by eBPF.
+	containerID := procMeta.ContainerID
+	if containerID == libpf.NullString {
+		if ptr.Cgroup_id != 0 {
+			containerID = process.ExtractContainerIDFromCgroupInode(ptr.Cgroup_id)
+		}
+		// Final fallback: when eBPF-reported PID doesn't exist in /proc (PID namespace
+		// mismatch in kind clusters) and cgroup_id didn't help, try looking up the
+		// container by the process's comm name. This only works when the comm is unique
+		// across all containers visible in the host-namespace /proc.
+		if containerID == libpf.NullString {
+			commStr := goString(ptr.Comm[:])
+			containerID = process.LookupContainerIDByComm(commStr.String())
+			if _, seen := pidLoggedOnce.LoadOrStore(uint64(pid), struct{}{}); !seen {
+				if containerID != libpf.NullString {
+					log.Infof("loadBpfTrace: comm-based fallback pid=%d comm=%q -> containerID=%q",
+						pid, commStr, containerID)
+				} else {
+					log.Infof("loadBpfTrace: no container for pid=%d comm=%q (no PID/cgroup/comm match)",
+						pid, commStr)
+				}
+			}
+		}
+	}
 	trace := t.tracePool.Get().(*libpf.EbpfTrace)
 	*trace = libpf.EbpfTrace{
 		Comm:             goString(ptr.Comm[:]),
 		ExecutablePath:   procMeta.Executable,
-		ContainerID:      procMeta.ContainerID,
+		ContainerID:      containerID,
 		ProcessName:      procMeta.Name,
 		APMTraceID:       *(*libpf.APMTraceID)(unsafe.Pointer(&ptr.Apm_trace_id)),
 		APMTransactionID: *(*libpf.APMTransactionID)(unsafe.Pointer(&ptr.Apm_transaction_id)),

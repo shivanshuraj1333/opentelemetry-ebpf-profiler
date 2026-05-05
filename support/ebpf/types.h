@@ -610,6 +610,9 @@ typedef struct Trace {
   u32 tid;
   // Monotonic kernel time in nanosecond precision.
   u64 ktime;
+  // The cgroupv2 cgroup ID of the process (equals cgroup directory inode).
+  // Used to resolve container ID when PID namespace remapping is needed.
+  u64 cgroup_id;
   // The current COMM of the thread of this Trace.
   u8 comm[COMM_LEN];
   // APM transaction ID or all-zero if not present.

@@ -754,10 +754,11 @@ static inline EBPF_INLINE int collect_trace(
 
   Trace *trace  = &record->trace;
   trace->origin = origin;
-  trace->pid    = pid;
-  trace->tid    = tid;
-  trace->ktime  = trace_timestamp;
-  trace->value  = value;
+  trace->pid       = pid;
+  trace->tid       = tid;
+  trace->ktime     = trace_timestamp;
+  trace->cgroup_id = bpf_get_current_cgroup_id();
+  trace->value     = value;
   if (bpf_get_current_comm(&(trace->comm), sizeof(trace->comm)) < 0) {
     increment_metric(metricID_ErrBPFCurrentComm);
   }

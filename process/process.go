@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"golang.org/x/sys/unix"
@@ -28,6 +29,101 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/stringutil"
 )
+
+// cgroupInodeLoggedOnce tracks cgroup inodes we have already logged about to avoid flooding.
+var cgroupInodeLoggedOnce sync.Map
+
+// commContainerCacheTTL is how often we rebuild the comm→container_id cache.
+const commContainerCacheTTL = 15 * time.Second
+
+// commContainerCache is a best-effort cache mapping process comm names to container IDs,
+// built by scanning the host /proc (kind-node namespace). Used as a fallback when the
+// eBPF-reported PID does not exist in /proc (PID namespace mismatch in kind clusters).
+// Only entries where the comm uniquely maps to a single container are kept.
+var commContainerCache struct {
+	mu         sync.Mutex
+	lastUpdate time.Time
+	data       map[string]libpf.String // comm → container_id (only unique mappings)
+}
+
+// LookupContainerIDByComm returns the container ID for a process whose comm name is unique
+// across all containers visible in /proc. Returns NullString if the comm is ambiguous
+// (multiple containers) or not found.
+func LookupContainerIDByComm(comm string) libpf.String {
+	commContainerCache.mu.Lock()
+	defer commContainerCache.mu.Unlock()
+
+	if time.Since(commContainerCache.lastUpdate) > commContainerCacheTTL {
+		commContainerCache.data = buildCommContainerMap()
+		commContainerCache.lastUpdate = time.Now()
+		log.Infof("LookupContainerIDByComm: rebuilt comm→container cache with %d unique entries",
+			len(commContainerCache.data))
+	}
+
+	if commContainerCache.data == nil {
+		return libpf.NullString
+	}
+	return commContainerCache.data[comm]
+}
+
+// buildCommContainerMap scans /proc to build a map from comm names to container IDs.
+// Only comms that are found in exactly one container are included.
+func buildCommContainerMap() map[string]libpf.String {
+	// comm → set of container IDs seen with that comm
+	commToContainers := make(map[string]map[libpf.String]struct{})
+
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		log.Warnf("buildCommContainerMap: failed to read /proc: %v", err)
+		return nil
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, err := strconv.Atoi(entry.Name()); err != nil {
+			continue // skip non-numeric entries
+		}
+		pid := entry.Name()
+
+		commBytes, err := os.ReadFile("/proc/" + pid + "/comm")
+		if err != nil {
+			continue
+		}
+		comm := strings.TrimSpace(string(commBytes))
+		if comm == "" {
+			continue
+		}
+
+		cgroupFile, err := os.Open("/proc/" + pid + "/cgroup")
+		if err != nil {
+			continue
+		}
+		containerID := parseContainerID(cgroupFile)
+		cgroupFile.Close()
+
+		if containerID == libpf.NullString {
+			continue
+		}
+
+		if commToContainers[comm] == nil {
+			commToContainers[comm] = make(map[libpf.String]struct{})
+		}
+		commToContainers[comm][containerID] = struct{}{}
+	}
+
+	// Keep only comms that map to exactly one container
+	result := make(map[string]libpf.String, len(commToContainers))
+	for comm, containers := range commToContainers {
+		if len(containers) == 1 {
+			for containerID := range containers {
+				result[comm] = containerID
+			}
+		}
+	}
+	return result
+}
 
 // ErrNoMappings is returned when no mappings can be extracted.
 var ErrNoMappings = errors.New("no mappings")
@@ -237,6 +333,71 @@ func DetectSelfContainerIDViaInode() (libpf.String, uint64, error) {
 		return libpf.NullString, 0, fmt.Errorf("failed to walk host cgroup tree: %w", err)
 	}
 	return matched, selfIno, nil
+}
+
+// ExtractContainerIDFromCgroupInode finds the container ID for the given cgroupv2 cgroup ID
+// (which equals the inode of the cgroup directory on the host). This is used as a fallback
+// when the standard PID-based container ID lookup fails due to PID namespace mismatch,
+// e.g., when the profiler runs inside a kind cluster node (Docker container) but eBPF
+// reports init-namespace PIDs that don't exist in the profiler's /proc view.
+func ExtractContainerIDFromCgroupInode(cgroupID uint64) libpf.String {
+	const hostCgroupRoot = "/proc/1/root/sys/fs/cgroup"
+
+	// Only do the expensive walk and logging once per unique cgroup inode.
+	if _, alreadySeen := cgroupInodeLoggedOnce.LoadOrStore(cgroupID, struct{}{}); alreadySeen {
+		// Fast path: re-walk without logging
+		var matched libpf.String
+		_ = filepath.WalkDir(hostCgroupRoot, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || !d.IsDir() {
+				return nil
+			}
+			var st unix.Stat_t
+			if unix.Stat(p, &st) == nil && st.Ino == cgroupID {
+				if parts := expContainerID.FindStringSubmatch(p); len(parts) == 2 {
+					matched = libpf.Intern(parts[1])
+				}
+				return filepath.SkipAll
+			}
+			return nil
+		})
+		return matched
+	}
+
+	log.Infof("ExtractContainerIDFromCgroupInode: first lookup for inode %d under %s",
+		cgroupID, hostCgroupRoot)
+
+	var matched libpf.String
+	dirCount := 0
+	_ = filepath.WalkDir(hostCgroupRoot, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if d == nil {
+				log.Warnf("ExtractContainerIDFromCgroupInode: root walk error: %v", err)
+				return err
+			}
+			return nil
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		dirCount++
+		var st unix.Stat_t
+		if err := unix.Stat(p, &st); err != nil {
+			return nil
+		}
+		if st.Ino == cgroupID {
+			log.Infof("ExtractContainerIDFromCgroupInode: inode %d matched path %s", cgroupID, p)
+			if parts := expContainerID.FindStringSubmatch(p); len(parts) == 2 {
+				matched = libpf.Intern(parts[1])
+			} else {
+				log.Warnf("ExtractContainerIDFromCgroupInode: path %s did not match container ID regex", p)
+			}
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	log.Infof("ExtractContainerIDFromCgroupInode: scanned %d dirs for inode %d, result=%q",
+		dirCount, cgroupID, matched)
+	return matched
 }
 
 func trimMappingPath(path string) string {

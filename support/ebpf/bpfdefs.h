@@ -119,6 +119,7 @@ static int (*bpf_perf_event_output)(
 static long (*bpf_get_stack)(void *ctx, void *buf, u32 size, u64 flags) = (void *)
   BPF_FUNC_get_stack;
 static unsigned long long (*bpf_get_prandom_u32)(void) = (void *)BPF_FUNC_get_prandom_u32;
+static unsigned long long (*bpf_get_current_cgroup_id)(void) = (void *)BPF_FUNC_get_current_cgroup_id;
 
 __attribute__((format(printf, 1, 3))) static int (*bpf_trace_printk)(
   const char *fmt, int fmt_size, ...) = (void *)BPF_FUNC_trace_printk;

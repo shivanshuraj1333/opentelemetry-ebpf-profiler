@@ -628,8 +628,22 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 			// Since listing /proc and opening files in there later is inherently racy,
 			// we expect to lose the race sometimes and thus expect to hit os.IsNotExist.
 			pm.mappingStats.errProcNotExist.Add(1)
-			log.Debugf("removing pid due to mappings read error: %v", err)
-			pm.processPIDExit(pid)
+			if alive, _ := isPIDLive(pid); alive {
+				// Process is alive but its /proc entry is not visible — this happens when
+				// the profiler runs inside a container with a private /proc mount and eBPF
+				// reports a PID from an outer namespace that is not exposed here (PID
+				// namespace boundary). Keep the dummy entry in pid_page_to_mapping_info so
+				// eBPF continues generating traces; loadBpfTrace will resolve the container
+				// ID via the cgroup inode or comm-based fallback. The entry will be cleaned
+				// up when the process genuinely exits via sched_process_exit.
+				log.Debugf("pid %d alive but not in /proc (PID namespace boundary): %v", pid, err)
+				pm.ebpf.RemoveReportedPID(pid)
+			} else {
+				// Race condition: the process exited between the eBPF sample and our /proc
+				// read. Clean up fully so the PID slot is not held across a potential reuse.
+				log.Debugf("pid %d confirmed dead (lost /proc race): %v", pid, err)
+				pm.processPIDExit(pid)
+			}
 			return
 		default:
 			if e, ok := err.(*os.PathError); ok && e.Err == syscall.ESRCH {

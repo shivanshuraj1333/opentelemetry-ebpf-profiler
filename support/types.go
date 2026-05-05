@@ -157,6 +157,7 @@ type Trace struct {
 	Pid                uint32
 	Tid                uint32
 	Ktime              uint64
+	Cgroup_id          uint64
 	Comm               [16]uint8
 	Apm_transaction_id [8]byte
 	Apm_trace_id       [16]byte
@@ -329,7 +330,7 @@ type V8ProcInfo struct {
 
 const (
 	Sizeof_StackDelta = 0x4
-	Sizeof_Trace      = 0x62d0
+	Sizeof_Trace      = 0x62d8
 
 	sizeof_ApmIntProcInfo = 0x8
 	sizeof_DotnetProcInfo = 0x4
