@@ -28,7 +28,7 @@ int read_kernel_memory(UNUSED void *ctx)
     return 0;
   }
 
-  if (sys->pid != (bpf_get_current_pid_tgid() >> 32)) {
+  if (!is_our_analysis_task(sys->pid)) {
     // Execute the hook only in the context of requesting task.
     return 0;
   }
@@ -60,7 +60,7 @@ int read_task_struct(struct bpf_raw_tracepoint_args *ctx)
     return 0;
   }
 
-  if (sys->pid != (bpf_get_current_pid_tgid() >> 32)) {
+  if (!is_our_analysis_task(sys->pid)) {
     // Execute the hook only in the context of requesting task.
     return 0;
   }
@@ -83,6 +83,49 @@ int read_task_struct(struct bpf_raw_tracepoint_args *ctx)
   // Mark request handled once the helper has finished populating the result.
   sys->pid = 0;
 
+  return 0;
+}
+
+// read_pid_level discovers the depth of the profiler's own PID namespace.
+// Writes group_leader->thread_pid->level (u32) into sys->code[0..4) and clears
+// sys->pid to signal completion. Invoked once at startup; userspace then
+// passes the value as the `profiler_pidns_level` rodata var.
+SEC("raw_tracepoint/sys_enter")
+int read_pid_level(UNUSED struct bpf_raw_tracepoint_args *ctx)
+{
+  u32 key0 = 0;
+  struct SystemAnalysis *sys = bpf_map_lookup_elem(&system_analysis, &key0);
+  if (!sys || !is_our_analysis_task(sys->pid)) {
+    return 0;
+  }
+
+  void *task = (void *)bpf_get_current_task();
+  void *leader;
+  sys->err = bpf_probe_read_kernel(&leader, sizeof(leader),
+                                   task + task_group_leader_offset);
+  if (sys->err || !leader) {
+    if (!sys->err)
+      sys->err = -14; /* -EFAULT */
+    sys->pid = 0;
+    return 0;
+  }
+
+  void *pid;
+  sys->err = bpf_probe_read_kernel(&pid, sizeof(pid),
+                                   leader + task_thread_pid_offset);
+  if (sys->err || !pid) {
+    if (!sys->err)
+      sys->err = -14; /* -EFAULT */
+    sys->pid = 0;
+    return 0;
+  }
+
+  u32 level;
+  sys->err = bpf_probe_read_kernel(&level, sizeof(level),
+                                   pid + pid_level_offset);
+  if (!sys->err)
+    __builtin_memcpy(sys->code, &level, sizeof(level));
+  sys->pid = 0;
   return 0;
 }
 

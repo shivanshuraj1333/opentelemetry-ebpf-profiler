@@ -25,6 +25,17 @@ BPF_RODATA_VAR(u32, task_stack_offset, 0)
 // The offset of struct pt_regs within the kernel entry stack.
 BPF_RODATA_VAR(u32, stack_ptregs_offset, 0)
 
+// PID-namespace translation rodata. See bpfdefs.h for full documentation.
+// task_struct / struct pid / struct upid offsets are set from BTF at load
+// time; profiler_pidns_level is discovered by the read_pid_level probe.
+BPF_RODATA_VAR(u32, task_thread_pid_offset, 0)
+BPF_RODATA_VAR(u32, task_group_leader_offset, 0)
+BPF_RODATA_VAR(u32, pid_level_offset, 0)
+BPF_RODATA_VAR(u32, pid_numbers_offset, 0)
+BPF_RODATA_VAR(u32, upid_size, 0)
+BPF_RODATA_VAR(u32, upid_nr_offset, 0)
+BPF_RODATA_VAR(u32, profiler_pidns_level, 0)
+
 // Macro to create a map named exe_id_to_X_stack_deltas that is a nested maps with a fileID for the
 // outer map and an array as inner map that holds up to 2^X stack delta entries for the given
 // fileID.
@@ -610,10 +621,11 @@ static EBPF_INLINE int unwind_native(struct pt_regs *ctx)
 SEC("perf_event/native_tracer_entry")
 int native_tracer_entry(struct bpf_perf_event_data *ctx)
 {
-  // Get the PID and TGID register.
-  u64 id  = bpf_get_current_pid_tgid();
-  u32 pid = id >> 32;
-  u32 tid = id & 0xFFFFFFFF;
+  // Emit the PID as the profiler's /proc sees it. No-op on EKS / bare-metal.
+  // pid==0 covers idle, kernel threads, and tasks with a shallower pidns than
+  // the profiler — handled by the existing filter_idle_frames path below.
+  u32 pid = get_pid_in_profiler_ns();
+  u32 tid = (u32)(bpf_get_current_pid_tgid() & 0xFFFFFFFF);
 
   if (pid == 0 && filter_idle_frames) {
     return 0;
